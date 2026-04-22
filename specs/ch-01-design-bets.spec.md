@@ -32,7 +32,7 @@
 场景: 代码规模认知
   假设 读者需要理解项目复杂度
   当 阅读技术栈总览
-  那么 读者能从代码规模数据（run_agent.py ~23K, cli.py ~23K, 全项目 ~50K Python + ~10K TypeScript）理解项目的工程挑战
+  那么 读者能从代码规模数据（run_agent.py ~12K, cli.py ~11K, 全项目 ~258K Python + ~50K TypeScript）理解项目的工程挑战
 
 场景: 双运行时风险
   假设 读者关注部署复杂度
@@ -78,7 +78,7 @@
 
 ## Problem IDs
 
-- P-01-01 [Arch/High] 巨型单文件：run_agent.py 和 cli.py 各 23K 行
+- P-01-01 [Arch/High] 巨型单文件：run_agent.py 和 cli.py 各超万行
 - P-01-02 [Arch/Medium] 双运行时依赖：Python + Node.js
 - P-01-03 [Perf/Medium] 部署复杂：pip install + 50+ 依赖链
 - P-01-04 [Perf/Low] 冷启动 3-5 秒，空载内存 200MB+
