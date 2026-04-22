@@ -1,0 +1,13 @@
+[book]
+authors = ["栗子KK"]
+language = "zh"
+multilingual = false
+src = "src"
+title = "解构与重铸 — Hermes Agent 源码深度解析与 Rust 重写实战"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
