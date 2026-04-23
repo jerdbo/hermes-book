@@ -60,7 +60,7 @@ graph TB
 
 用户与 Hermes 交互有三个入口，它们最终都汇聚到同一个 `AIAgent` 实例：
 
-1. **CLI 入口** — `hermes_cli/main.py` 是现代命令行界面（`hermes_cli/main.py:6510`，`main()` 函数）。通过 `pyproject.toml:118` 注册为 `hermes` 命令。它用 argparse 定义了 20+ 子命令（`hermes_cli/main.py:6623`），涵盖 `chat`、`gateway`、`setup`、`config`、`model`、`sessions` 等。
+1. **CLI 入口** — `hermes_cli/main.py` 是现代命令行界面（`hermes_cli/main.py:6510`，`main()` 函数）。通过 `pyproject.toml:118` 注册为 `hermes` 命令。它用 argparse 定义了 35 个子命令（`hermes_cli/main.py:6623`），涵盖 `chat`、`gateway`、`setup`、`config`、`model`、`sessions` 等。
 
 2. **Direct Agent Runner** — `run_agent.py` 提供了 `hermes-agent` 命令（`pyproject.toml:119`），可以跳过 CLI 直接启动 agent loop。这在网关模式或程序化调用时特别有用。
 

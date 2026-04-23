@@ -895,39 +895,61 @@ hermes-rs/
 
 这些问题的**根因**是 Python 语言特性,Rust 语言本身消灭:
 
-#### 类型安全相关 (9 个)
+#### 模块边界强制 (6 个)
 
 | 问题 ID | 原问题描述 | Rust 消灭方式 |
 |---------|----------|-------------|
-| **P-01-01** | 巨型单文件 run_agent.py 11,988 行 | 模块系统 + crate 强制拆分,单文件 >2000 行会触发 clippy 警告 |
-| **P-01-03** | pip install + 50+ 依赖链 | 单二进制,零运行时依赖 |
-| **P-01-04** | 冷启动延迟与空载内存 | 无解释器,启动 <50ms,空载内存 <20MB |
-| **P-03-01** | AIAgent God Object 12K 行 | 类型边界强制拆分 (Agent, Tools, Memory 等 trait) |
-| **P-09-01** | 手写 JSON Schema | `#[derive(JsonSchema)]` 宏自动生成 |
-| **P-15-01** | cli.py 11,045 行单文件 | Ratatui 模块化架构,强制拆分 |
-| **P-15-04** | process_command() 455 行 if/elif 链 | `enum Command` + match 表达式,编译时穷尽性检查 |
+| **P-03-01** | AIAgent God Object 12K 行 | 类型边界强制拆分 (Agent, Tools, Memory 等 trait),crate 级模块化 |
+| **P-15-01** | cli.py 11,045 行单文件 | Ratatui 模块化架构,clippy 单文件 >2000 行触发警告 |
+| **P-01-01** | 巨型单文件 run_agent.py | 模块系统 + `pub(crate)` 可见性强制拆分 |
+| **P-14-01** | 适配器代码大量重复 | Trait + 默认实现,共性逻辑下沉到 `BasePlatformAdapter` |
+| **P-15-02** | CLI 与 TUI 逻辑重复 | 统一 Ratatui 架构,共享核心模块消除重复 |
+| **P-02-01** | 配置散落多处无单一来源 | 配置统一到 `config.rs` 模块,违背 Single Source of Truth 会编译失败 |
 
-#### 并发安全相关 (8 个)
-
-| 问题 ID | 原问题描述 | Rust 消灭方式 |
-|---------|----------|-------------|
-| **P-08-01** | SQLite 高并发写锁竞争 | 连接池 + RwLock,读操作无锁并发 |
-| **P-13-01** | LRU 驱逐导致会话丢失 | Arc 引用计数,驱逐时自动检查引用 |
-| **P-13-03** | Agent 复用状态泄漏 | 所有权系统禁止共享可变状态 |
-
-#### 内存管理相关 (6 个)
+#### 所有权与线程安全 (8 个)
 
 | 问题 ID | 原问题描述 | Rust 消灭方式 |
 |---------|----------|-------------|
-| **P-10-07** | 进程泄漏风险 | RAII 自动清理,`Drop` trait 保证资源释放 |
-| **P-13-02** | 无 at-least-once 投递语义 | 类型化消息队列 (如 `tokio::sync::mpsc`) + 持久化 |
+| **P-13-03** | Agent 复用状态泄漏 | `&mut self` 强制独占借用,无法跨调用共享可变状态 |
+| **P-11-01** | 文件写入非原子 | `tempfile` crate + `rename` 原子替换,或 `std::fs::write` |
+| **P-07-04** | 异常被吞无传播 | `Result<T, E>` 强制错误处理,未处理的 `Result` 触发编译警告 |
+| **P-13-02** | 无 at-least-once 投递语义 | 类型化消息队列 (`tokio::sync::mpsc`) + 持久化确认 |
+| **P-08-03** | MCP 连接管理混乱 | `Arc<Mutex<T>>` 连接池 + RAII 自动归还 |
+| **P-12-03** | 后台线程资源泄漏 | `Drop` trait 保证 spawn 的任务在 scope 结束时清理 |
+| **P-10-07** | 进程泄漏风险 | RAII 自动清理,`Drop` trait 保证子进程回收 |
+| **P-16-03** | 沙箱资源未释放 | `Drop` trait 保证临时文件和进程句柄释放 |
 
-#### 运行时错误相关 (8 个)
+#### 类型安全 (9 个)
 
 | 问题 ID | 原问题描述 | Rust 消灭方式 |
 |---------|----------|-------------|
-| **P-03-03** | Grace Call 语义不清 | 显式状态机 enum,编译器强制处理所有分支 |
+| **P-03-02** | 隐式状态机 while 循环 + break | 显式 `enum State` + `match`,遗漏分支编译失败 |
+| **P-04-01** | Provider 切换 if/elif 分支 | `trait Provider` + `dyn Provider`,新模型只需实现 trait |
+| **P-03-03** | Grace Call 死代码 | `#[warn(dead_code)]` + clippy lint 自动检测未使用字段 |
+| **P-03-05** | 退避策略不完整 | 类型化 `enum RetryPolicy` + `struct RetryAfter`,强制处理所有情况 |
+| **P-09-01** | 手写 JSON Schema | `#[derive(JsonSchema)]` 宏自动生成,与结构体定义同步 |
+| **P-09-03** | 工具无版本管理 | `semver` crate 类型化版本号,`serde` 自动序列化 |
+| **P-06-03** | 上下文压缩信息丢失 | `Option<T>` 和 `Result` 显式表达缺失,编译器强制处理 |
+| **P-13-04** | 配置桥接静默失败 | `Result` 类型强制启动时处理所有平台初始化错误 |
+| **P-14-02** | 错误处理不一致 | `thiserror` 统一错误类型,`?` 操作符自动传播 |
+
+#### 配置与验证 (5 个)
+
+| 问题 ID | 原问题描述 | Rust 消灭方式 |
+|---------|----------|-------------|
+| **P-02-03** | 配置验证静默失败 | `serde` deserialize 失败返回类型化错误,无法静默跳过 |
+| **P-02-04** | 不支持配置热重载 | `notify` crate 监听文件变更 + validation hook |
 | **P-05-04** | SOUL.md 与默认身份冲突无警告 | `Option<SoulConfig>` 类型,编译器强制处理 None 情况 |
+| **P-05-03** | 上下文文件大小不检查累积 | 类型化 `struct FileSize(usize)` + newtype 模式强制边界检查 |
+| **P-06-04** | MD5 去重效率低 | `blake3` crate 替代 MD5,类型化 `Hash` 避免字符串比较 |
+
+#### 其他 (3 个)
+
+| 问题 ID | 原问题描述 | Rust 消灭方式 |
+|---------|----------|-------------|
+| **P-01-04** | 冷启动延迟与空载内存 | 零成本抽象,release 构建二进制 5-10MB vs Python 60MB |
+| **P-12-04** | 委派深度无限制 | `const MAX_DEPTH: usize` + 编译期检查,类型系统强制深度限制 |
+| **P-15-04** | process_command() 455 行 if/elif 链 | `clap` derive macro 自动生成 CLI 解析 + `enum Command` match |
 
 ---
 
@@ -935,31 +957,49 @@ hermes-rs/
 
 这些问题在 Rust 生态中有更好的解决方案:
 
-#### 安全加固 (5 个)
+#### 异步运行时 (5 个)
 
 | 问题 ID | 原问题描述 | Rust 改善方案 |
 |---------|----------|-------------|
-| **P-10-01** | 无系统级沙箱 | Landlock (Linux 5.13+) 或 macOS Seatbelt 绑定,编译时启用 |
-| **P-05-01** | 提示注入检测只 log 不拦截 | `Result<T, InjectionError>` 强制调用者处理错误 |
-| **P-05-02** | 注入检测不完整 | 集成 `unicode-normalization` crate 检测混淆 |
-| **P-10-02** | 正则无锚定漏洞 | `regex` crate 的编译时验证 |
-| **P-10-03** | Smart Approval 非确定性 | LLM 调用结果类型化,强制 confidence score |
+| **P-01-02** | 双运行时依赖 (Python + Node.js) | `tokio` 统一异步运行时,消除 Python 异步生态分裂 |
+| **P-08-01** | SQLite 高并发写锁竞争 | `sqlx` 异步驱动 + 连接池,或换用 `sled`/`redb` 嵌入式数据库 |
+| **P-07-01** | prefetch_all 串行执行 | `tokio::spawn` 并发预取,`FuturesUnordered` 流式处理 |
+| **P-11-02** | Web 请求超时粗放 | `reqwest` 精细超时控制 (connect/read/total 独立设置) |
+| **P-16-01** | 每次扫描技能目录 | `tokio::fs` 异步目录扫描 + `OnceCell` 延迟初始化 |
 
-#### 架构优化 (8 个)
-
-| 问题 ID | 原问题描述 | Rust 改善方案 |
-|---------|----------|-------------|
-| **P-14-01** | 适配器代码大量重复 | Trait + 默认实现,共性逻辑下沉到 `BasePlatformAdapter` |
-| **P-04-01** | Provider 切换 if/elif 分支 | `enum Provider` + match,编译时穷尽性检查 |
-| **P-03-02** | 隐式状态机 while 循环 + break | 显式 `enum LoopState` + match,状态转换可视化 |
-
-#### 性能优化 (6 个)
+#### 沙箱与安全 (4 个)
 
 | 问题 ID | 原问题描述 | Rust 改善方案 |
 |---------|----------|-------------|
-| **P-04-02** | ~4 chars/token 硬编码,中文偏差 | `tokenizers` crate 精确计算,支持 tiktoken/sentencepiece |
-| **P-03-04** | 100+ 字符串模式顺序匹配 | `aho-corasick` crate 多模式并行匹配 |
-| **P-04-03** | 缓存失效边界不清 | 类型化缓存统计,强制写入 session log |
+| **P-10-01** | 无系统级沙箱 | Linux Landlock / macOS Seatbelt / Windows AppContainer FFI 绑定 |
+| **P-02-02** | API Key 明文存储 | `keyring` crate 系统密钥链 + `zeroize` 内存清除 |
+| **P-12-02** | 凭证清除不完整 | `zeroize` crate 保证密钥从内存中安全擦除 |
+| **P-11-03** | 浏览器无沙箱隔离 | `chromiumoxide` headless 库内置隔离,无需外部 Playwright |
+
+#### 工具链与测试 (4 个)
+
+| 问题 ID | 原问题描述 | Rust 改善方案 |
+|---------|----------|-------------|
+| **P-08-02** | 无数据迁移框架 | `refinery` 或 `sea-orm-migration` 自动管理 schema 版本 |
+| **P-05-02** | 注入检测不完整 | `regex` crate 默认锚定 + `nom` parser combinator 精确解析 |
+| **P-10-02** | 正则无锚定漏洞 | `regex` crate 编译时验证,默认全匹配语义 |
+| **P-10-06** | 无审批审计日志 | `tracing` 结构化日志 + `opentelemetry` 无缝集成 |
+
+#### 跨平台与部署 (3 个)
+
+| 问题 ID | 原问题描述 | Rust 改善方案 |
+|---------|----------|-------------|
+| **P-14-03** | WhatsApp 依赖 Node.js 桥接 | `wasm-bindgen` WebAssembly 或纯 Rust HTTP 客户端替代 |
+| **P-15-03** | TUI 依赖 Node.js (React Ink) | `ratatui` 纯 Rust TUI,无 Node.js 依赖 |
+| **P-01-03** | 50+ 依赖链部署复杂 | Rust 静态链接二进制,零依赖部署,单文件 <15MB |
+
+#### 其他 (3 个)
+
+| 问题 ID | 原问题描述 | Rust 改善方案 |
+|---------|----------|-------------|
+| **P-04-03** | 缓存失效边界不清 | `moka` 或 `quick_cache` TTL 和 LRU 策略,类型化缓存统计 |
+| **P-06-05** | 缺少 Repo Map | `tree-sitter` 增量解析 + `rayon` 并行 AST 遍历 |
+| **P-16-02** | 插件无版本管理 | `abi_stable` crate 稳定 ABI,插件版本兼容性编译时检查 |
 
 ---
 
@@ -967,23 +1007,45 @@ hermes-rs/
 
 这些问题需要重新设计架构,Rust 提供更好的工具:
 
-#### 架构重构 (10 个)
+#### 状态机与控制流 (3 个)
 
 | 问题 ID | 原问题描述 | Rust 重构方案 |
 |---------|----------|-------------|
-| **P-05-03** | 上下文文件大小上限不检查总累积 | `struct ContextLimits { total: usize, per_file: usize }` 编译时配置 |
-| **P-13-04** | 配置桥接静默失败 | `Result` 类型,启动时强制处理所有平台初始化错误 |
-| **P-15-02** | CLI 与 TUI 逻辑重复 | 统一 Ratatui TUI,共享核心逻辑 |
-| **P-15-03** | TUI 依赖 Node.js | Ratatui 纯 Rust,无 Node.js 依赖 |
+| **P-03-04** | 100+ 字符串模式顺序匹配 | `aho-corasick` crate 多模式并行匹配 + 优先级队列 |
+| **P-06-01** | 阈值硬编码 | 自适应算法设计 (滑动窗口动态阈值),Rust 零开销实现 |
+| **P-06-02** | 缺少微压缩策略 | 需设计压缩策略 (Anthropic Prompt Caching vs 动态摘要) |
 
-#### 可靠性改进 (5 个)
+#### Provider 抽象 (2 个)
 
 | 问题 ID | 原问题描述 | Rust 重构方案 |
 |---------|----------|-------------|
-| **P-08-02** | 无数据迁移框架 | `refinery` crate,类型安全的迁移脚本 |
-| **P-03-05** | 退避策略对 Rate-Limit 头利用不完整 | 类型化 HTTP 头解析,强制处理 Retry-After |
+| **P-04-02** | ~4 chars/token 硬编码估算 | 需 tokenizer 集成 (`tiktoken-rs`) 或 provider API 返回 |
+| **P-09-04** | 64+ 工具 Schema 膨胀 | 需设计 lazy schema loading 或工具分组策略 |
+
+#### 安全策略 (3 个)
+
+| 问题 ID | 原问题描述 | Rust 重构方案 |
+|---------|----------|-------------|
+| **P-10-03** | Smart Approval 非确定性 | 需设计确定性规则引擎 (如 CEL 表达式评估) |
 | **P-10-04** | 无白名单机制 | `enum ApprovalPolicy { Whitelist(Vec<Regex>), Blacklist(...) }` 编译时验证 |
-| **P-10-06** | 无审批审计日志 | 结构化日志 (tracing crate) 自动记录所有审批 |
+| **P-10-05** | 审批轮询开销大 | 需设计基于事件的审批系统 (channel + notify) |
+
+#### 可靠性保证 (5 个)
+
+| 问题 ID | 原问题描述 | Rust 重构方案 |
+|---------|----------|-------------|
+| **P-05-01** | 注入检测仅 log 不拦截 | 需设计分级响应策略 (log/warn/block),`Result` 强制处理 |
+| **P-13-01** | LRU 驱逐丢会话 | 需设计持久化 + 内存混合缓存策略 (disk spillover) |
+| **P-12-01** | MCP 速率限制弱 | 需设计 token bucket 或 leaky bucket 算法 |
+| **P-07-02** | 工具名冲突无检测 | 需设计命名空间和冲突检测机制 |
+| **P-12-05** | 代码执行沙箱弱 | 需设计权限模型 (Capability-based security) |
+
+#### 其他 (2 个)
+
+| 问题 ID | 原问题描述 | Rust 重构方案 |
+|---------|----------|-------------|
+| **P-07-03** | 记忆清洗不对称 | 需设计可逆序列化格式,确保读写一致性 |
+| **P-15-05** | JSON-RPC 协议不完整 | 需重新设计前后端通信协议 |
 
 ---
 

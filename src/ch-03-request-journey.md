@@ -159,9 +159,9 @@ while (api_call_count < self.max_iterations
 
 1. **`api_call_count < self.max_iterations`**：本地计数器未超限。即使 `IterationBudget` 异常，本地计数器也能阻止无限循环——两个独立机制保护同一个不变量。
 2. **`self.iteration_budget.remaining > 0`**：线程安全的全局预算（`run_agent.py:202`）尚有余额。
-3. **`self._budget_grace_call`**：恩赐调用标志。当前两个条件都为 `False` 时，grace call 让循环再执行一次（详见 3.3 节）。
+3. **`self._budget_grace_call`**：恩赐调用标志。设计意图是当前两个条件都为 `False` 时让循环再执行一次。
 
-Python 中 `and` 优先于 `or`，所以求值顺序是 `(A and B) or C`——前两个条件构成"正常预算"守卫，grace call 是独立的旁路通道。**只要 grace call 为 True，即使预算耗尽，循环也会继续**。
+Python 中 `and` 优先于 `or`，所以求值顺序是 `(A and B) or C`——前两个条件构成"正常预算"守卫，grace call 是独立的旁路通道。**然而，如 3.3.3 节分析，`_budget_grace_call` 从未被设为 `True`，这是死代码**。实际的循环终止完全由前两个条件控制。
 
 ### 3.2.2 隐式状态机
 
@@ -245,7 +245,7 @@ elif not self.iteration_budget.consume():
     break
 ```
 
-注意 `if/elif` 的结构：grace call 有更高优先级。如果正处于 grace call 阶段，消费 grace 标志但不 break；否则尝试消费预算，消费失败则 break。这个优先级顺序确保了 grace call 一定会被执行——即使预算已经耗尽。
+注意 `if/elif` 的结构：grace call 分支有更高优先级。如果 grace 标志为 `True`，消费标志但不 break；否则尝试消费预算，消费失败则 break。然而如 3.3.3 节分析，`_budget_grace_call` 从未被激活，`if` 分支是死代码——实际执行总是走 `elif` 分支。
 
 **条件 3：纯文本响应（Text Response = Final Answer）**
 
@@ -364,9 +364,9 @@ class IterationBudget:
 
 `IterationBudget` 还提供了 `refund()` 方法，用于退还不应计入预算的迭代。例如 `execute_code`（程序化工具调用）的迭代会被退还（`run_agent.py:202-215` 注释说明），因为这些迭代是用户代码驱动的，不应消耗 Agent 的自主决策预算。上下文压缩后重启的迭代也会被退还（`run_agent.py:10834-10835`），因为压缩是系统行为，不是 Agent 的决策消耗。
 
-### 3.3.2 Grace Call：最后一搏
+### 3.3.2 预算耗尽处理：信息隐藏与强制总结
 
-Grace Call 的设计理念记录在一段注释中，这段注释的价值远超其代码行数：
+预算耗尽处理的设计理念记录在一段注释中，这段注释的价值远超其代码行数：
 
 ```python
 # run_agent.py:1011-1018
@@ -380,25 +380,11 @@ self._budget_exhausted_injected = False
 self._budget_grace_call = False
 ```
 
-这段注释有三个关键信息，每一个都值得深入分析：
+这段注释有两个关键信息：
 
 **第一，模型不知道自己有预算限制**——直到预算真正耗尽。issue #7915 记录了一个真实的问题：当模型收到"你还剩 N 次迭代"的中间压力警告时，它倾向于过早放弃复杂任务——在第 60 次迭代看到"还剩 30 次"就开始草草总结。解决方案是**信息隐藏**：模型一直认为自己有无限预算，直到真正耗尽才被告知。
 
-**第二，耗尽时注入一条消息**——给模型一次 grace call 的机会产出最终响应。
-
-**第三，如果 grace call 仍返回工具调用而非文本**——则强制注入 user-message 要求模型总结。这是 `_handle_max_iterations` 方法的职责（`run_agent.py:8406`）。
-
-Grace Call 的消费逻辑体现在循环入口：
-
-```python
-# run_agent.py:8963-8964
-if self._budget_grace_call:
-    self._budget_grace_call = False  # grace consumed
-```
-
-一旦 `_budget_grace_call` 被设为 `True`（在预算耗尽的处理逻辑中），循环会多执行一次迭代。在这次迭代中，grace 标志被置为 `False`，因此下一次循环条件检查时，三个条件都为 `False`，循环终止。
-
-如果 grace call 后模型仍未产出文本响应，`_handle_max_iterations`（`run_agent.py:8406`）接管：
+**第二，耗尽时注入总结请求**——`_handle_max_iterations` 方法（`run_agent.py:8406`）负责这一步：
 
 ```python
 # run_agent.py:8406-8415
@@ -416,13 +402,23 @@ def _handle_max_iterations(self, messages: list, api_call_count: int) -> str:
 
 这个方法注入指令后发起一次**不提供工具定义**的 API 调用——模型物理上无法产出 tool_calls，比指令中的否定语句（"不要调用工具"）更可靠。
 
-### 3.3.3 Grace Call 的边界情况
+### 3.3.3 Grace Call：死代码分析（P-03-03）
 
-Grace Call 机制存在一个微妙的语义问题（P-03-03）：**如果模型在 grace call 中发起了工具调用，这些工具调用是否会被执行？**
+`while` 循环条件中的 `self._budget_grace_call`（`run_agent.py:8944`）和对应的消费逻辑（`run_agent.py:8963-8964`）构成了一个 Grace Call 机制的**骨架**——当预算耗尽时允许额外一次迭代。
 
-从代码流程看，grace call 只是循环的又一次正常迭代。如果模型返回了 tool_calls，工具会被执行，结果会追加到 messages。但此时 `_budget_grace_call` 已被置为 `False`，下一次循环条件检查会失败——循环终止。工具执行的结果模型永远看不到，它们被"静默丢失"了。
+然而，通过全文搜索 `run_agent.py`，我们发现 `_budget_grace_call` **从未被设置为 `True`**。它在 `__init__` 中初始化为 `False`，在循环入口处被消费（重置为 `False`），但没有任何代码路径将它激活。这意味着 `while` 循环条件中的 `or self._budget_grace_call` 分支**永远为 False**——这是经典的死代码。
 
-具体场景：模型在 grace call 中调用 `write_file` 将脚本写入磁盘。文件被创建了，但循环随即终止——模型收到的总结请求基于 grace call 之前的知识状态，可能与实际执行结果不一致。
+循环入口的消费逻辑同样是死代码：
+
+```python
+# run_agent.py:8963-8964
+if self._budget_grace_call:
+    self._budget_grace_call = False  # grace consumed — 永远不会执行
+```
+
+从注释的历史痕迹推测，Grace Call 可能曾在早期版本中被激活——当预算耗尽检测逻辑触发时设置 `_budget_grace_call = True`。但在后续的重构中，激活路径被移除或替换为直接调用 `_handle_max_iterations`，而骨架代码被遗忘了。
+
+这不是一个功能缺陷，而是一个代码卫生问题：死代码增加了阅读者的认知负担（本章 3.2.1 节对 Grace Call 的分析本身就是一个例证），并可能误导后续开发者认为该机制是活跃的。
 
 ---
 
@@ -775,17 +771,13 @@ while state != LoopState.TERMINATED:
 
 更完整的方案可以使用 `transitions` 库或自定义状态机框架，但对于 Hermes 的规模，`enum` + `match/case` 足以提供显式性而不引入过度抽象。
 
-### P-03-03 [Rel/High] Grace Call 语义不清：工具调用在 grace call 中静默丢失
+### P-03-03 [Arch/Low] Grace Call 死代码：机制骨架存在但从未激活
 
-**What**：如果模型在 grace call 期间发起工具调用，工具会被执行（可能有副作用），但结果不会被模型看到——循环在下一次迭代条件检查时终止。
+**What**：`_budget_grace_call` 标志在 `__init__` 中初始化为 `False`（`run_agent.py:1018`），在 `while` 循环条件（`run_agent.py:8944`）和消费逻辑（`run_agent.py:8963-8964`）中被引用，但**从未被设置为 `True`**。整个 Grace Call 机制是死代码。
 
-**Why**：Grace Call 是为了解决"模型在最后一次迭代中正好在做工具调用，没有机会产出文本响应"的问题。但它只给了模型一次额外的 API 调用机会，没有考虑"这次调用本身又返回了工具调用"的递归情况。
+**Why**：推测在早期版本中，预算耗尽时会设置 `_budget_grace_call = True` 允许额外一次迭代。后续重构将耗尽处理改为直接调用 `_handle_max_iterations`，但遗留了骨架代码。
 
-**How (to improve)**：两种方案：
-1. **保守方案**：在 grace call 期间禁用工具提供（不传 `tools` 参数），强制模型产出文本。这与 `_handle_max_iterations` 的行为一致。
-2. **激进方案**：允许 grace call 中的工具调用，但将 grace call 延伸为"grace call chain"——最多额外 N 次迭代（例如 3 次），直到模型产出文本或达到 grace 上限。
-
-两种方案都需要在 `_budget_grace_call` 的消费逻辑中增加工具调用检查。
+**How (to improve)**：删除死代码。移除 `_budget_grace_call` 属性及其所有引用，简化 `while` 循环条件为 `while api_call_count < self.max_iterations and self.iteration_budget.remaining > 0`。这不改变任何运行时行为，但显著降低循环条件的认知复杂度。
 
 ### P-03-04 [Perf/Medium] 100+ 字符串模式顺序匹配
 
@@ -849,7 +841,7 @@ def classify_api_error(error, ...):
 | 单对话 Agent 模型 | `IterationBudget` 每回合重置，独立于子 Agent，强化了"一次对话回合"的边界 |
 | OpenAI 兼容协议 | 响应归一化横跨 Chat Completions / Codex Responses / Anthropic Messages 三种 API 格式，`api_messages` 的清洗确保兼容性 |
 
-本章也暴露了有机增长的代价：12K 行的单文件（P-03-01）、隐式状态机（P-03-02）、Grace Call 的语义漏洞（P-03-03）、100+ 模式的线性匹配（P-03-04）、退避策略的信息浪费（P-03-05）。这些不是"技术债务"——它们是在快速迭代中做出的合理权衡。`while` + `break` 在只有 3 个退出条件时是最简洁的方案；`error_classifier.py` 的提取证明了模块化是可行的演进路径；`in` 操作符的模式匹配在 100 个模式时几乎零延迟。
+本章也暴露了有机增长的代价：12K 行的单文件（P-03-01）、隐式状态机（P-03-02）、Grace Call 的死代码残留（P-03-03）、100+ 模式的线性匹配（P-03-04）、退避策略的信息浪费（P-03-05）。这些不是"技术债务"——它们是在快速迭代中做出的合理权衡。`while` + `break` 在只有 3 个退出条件时是最简洁的方案；`error_classifier.py` 的提取证明了模块化是可行的演进路径；`in` 操作符的模式匹配在 100 个模式时几乎零延迟。
 
 问题不在于当初的选择是否"错误"，而在于随着系统复杂度的增长，这些选择开始产生可观的认知成本。阅读 1000+ 行的循环体来理解"循环什么时候退出"，不应该是贡献者的日常体验。好消息是，`error_classifier.py` 和 `retry_utils.py` 已经展示了提取路径——将内聚的子系统从 God Object 中剥离为独立模块，通过函数签名而非实例变量来传递依赖。本章分析的每个子系统（API 调用执行、响应归一化、消息构建、工具分发）都可以沿着同样的路径演进。
 
