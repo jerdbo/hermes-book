@@ -21,7 +21,7 @@ hermes = "hermes_cli.main:main"
 
 用户执行 `hermes` 命令后，`main()` 函数启动（`hermes_cli/main.py:6510`），解析命令行参数，创建 `AIAgent` 实例，并在交互循环中等待用户输入。当用户键入消息后，CLI 层调用 `agent.run_conversation(user_message)` 将控制权交给 Agent 核心。
 
-`AIAgent` 的构造函数接受 58 个参数（`run_agent.py:708-766`），涵盖了模型选择、工具配置、回调注入、预算控制等方方面面。这个数字本身就暗示了 God Object 的问题（后文 P-03-01 详述），但从功能角度看，这 58 个参数构成了 Agent 运行时的完整配置空间：
+`AIAgent` 的构造函数接受 61 个参数（`run_agent.py:708-770`），涵盖了模型选择、工具配置、回调注入、预算控制等方方面面。这个数字本身就暗示了 God Object 的问题（后文 P-03-01 详述），但从功能角度看，这 61 个参数构成了 Agent 运行时的完整配置空间：
 
 ```python
 # run_agent.py:708-719（摘录关键参数）
@@ -34,18 +34,18 @@ def __init__(
     max_iterations: int = 90,  # Default tool-calling iterations
     tool_delay: float = 1.0,
     enabled_toolsets: List[str] = None,
-    # ... 50+ more parameters
+    # ... 54 more parameters
 ):
 ```
 
-其中 `max_iterations=90` 是父 Agent 的默认迭代上限。子 Agent（通过 delegation 创建）的默认上限则是 50（`run_agent.py:206-210`）。这两个数字之间的关系——以及它们如何被 `IterationBudget` 管理——是 3.3 节的核心议题。
+其中 `max_iterations=90` 是父 Agent 的默认迭代上限。子 Agent（通过 delegation 创建）的默认上限则是 50（`run_agent.py:208-212`）。这两个数字之间的关系——以及它们如何被 `IterationBudget` 管理——是 3.3 节的核心议题。
 
 ### 3.1.2 run_conversation：一次对话回合的起点
 
-`run_conversation`（`run_agent.py:8417`）是每次对话回合的总控方法。它的签名揭示了设计意图——不仅接受当前消息，还接受完整的对话历史和流式回调：
+`run_conversation`（`run_agent.py:8575`）是每次对话回合的总控方法。它的签名揭示了设计意图——不仅接受当前消息，还接受完整的对话历史和流式回调：
 
 ```python
-# run_agent.py:8417-8424
+# run_agent.py:8575-8582
 def run_conversation(
     self,
     user_message: str,
@@ -59,12 +59,12 @@ def run_conversation(
 
 进入 `run_conversation` 后，第一件事并不是调用模型，而是一系列防御性准备工作。
 
-**第一步：恢复主运行时 + 输入净化**。如果上一轮切换到了 fallback 提供商，先恢复到主提供商（`run_agent.py:8457`）。然后清洗输入中的孤立代理字符（`run_agent.py:8462-8463`）和泄露的 `<memory-context>` 标签（`run_agent.py:8467-8475`）——前者来自富文本编辑器的粘贴，后者是 Honcho `saveMessages` 持久化后的"回流"。
+**第一步：恢复主运行时 + 输入净化**。如果上一轮切换到了 fallback 提供商，先恢复到主提供商（`run_agent.py:8615`）。然后清洗输入中的孤立代理字符（`run_agent.py:8620-8621`）和泄露的 `<memory-context>` 标签（`run_agent.py:8625-8633`）——前者来自富文本编辑器的粘贴，后者是 Honcho `saveMessages` 持久化后的"回流"。
 
 **第二步：重置重试计数器**。每个对话回合都是独立的——上一轮的错误状态不应污染这一轮：
 
 ```python
-# run_agent.py:8489-8501
+# run_agent.py:8649-8661
 # Reset retry counters and iteration budget at the start of each turn
 self._invalid_tool_retries = 0
 self._invalid_json_retries = 0
@@ -77,27 +77,27 @@ self._post_tool_empty_retried = False
 
 七个计数器对应七种生产环境中的真实故障模式：无效工具名、畸形 JSON、空响应体等。
 
-**第三步：连接健康检查 + 重置迭代预算**。先检测并清理上一轮遗留的僵尸 TCP 连接（`run_agent.py:8503-8515`），然后重置迭代预算：
+**第三步：连接健康检查 + 重置迭代预算**。先检测并清理上一轮遗留的僵尸 TCP 连接（`run_agent.py:8661-8673`），然后重置迭代预算：
 
 ```python
-# run_agent.py:8525
+# run_agent.py:8683
 self.iteration_budget = IterationBudget(self.max_iterations)
 ```
 
 每次调用 `run_conversation` 都会创建一个全新的 `IterationBudget`，这意味着**每个对话回合都有独立的 90 次迭代预算**。子 Agent 的预算是独立的（默认 50 次），不会从父 Agent 的预算中扣减。
 
-**第四步：构建系统提示词**。首次调用时构建并缓存（`run_agent.py:8580-8591`），后续复用缓存版本以保持 Anthropic prompt cache 的前缀稳定性。Gateway 场景从 session DB 加载（`run_agent.py:8593-8597`）而非重建。具体组装逻辑是第五章的主题。
+**第四步：构建系统提示词**。首次调用时构建并缓存（`run_agent.py:8738-8749`），后续复用缓存版本以保持 Anthropic prompt cache 的前缀稳定性。Gateway 场景从 session DB 加载（`run_agent.py:8751-8755`）而非重建。具体组装逻辑是第五章的主题。
 
 **第五步：添加用户消息并进入主循环**。
 
 ```python
-# run_agent.py:8570-8573
+# run_agent.py:8728-8731
 user_msg = {"role": "user", "content": user_message}
 messages.append(user_msg)
 current_turn_user_idx = len(messages) - 1
 ```
 
-`current_turn_user_idx` 记录了用户消息的位置索引，后续构建 API 消息时会在此位置注入 memory 和 plugin 上下文（`run_agent.py:8911-8922`），但只修改 API 副本，不触碰原始 `messages`。至此，控制流进入 Agent Loop。
+`current_turn_user_idx` 记录了用户消息的位置索引，后续构建 API 消息时会在此位置注入 memory 和 plugin 上下文（`run_agent.py:9069-9080`），但只修改 API 副本，不触碰原始 `messages`。至此，控制流进入 Agent Loop。
 
 ### 3.1.3 端到端请求流程
 
@@ -107,12 +107,12 @@ current_turn_user_idx = len(messages) - 1
 flowchart TD
     A["用户输入：帮我写一个 Python 脚本"] --> B["hermes_cli/main.py:6510<br/>main() 解析参数"]
     B --> C["创建 AIAgent<br/>run_agent.py:690"]
-    C --> D["run_conversation()<br/>run_agent.py:8417"]
-    D --> E["输入净化 + 重置计数器<br/>run_agent.py:8462-8501"]
-    E --> F["重置 IterationBudget<br/>run_agent.py:8525"]
-    F --> G["构建/复用系统提示词<br/>run_agent.py:8580"]
-    G --> H["添加 user message<br/>run_agent.py:8570"]
-    H --> I{"Agent Loop<br/>run_agent.py:8786"}
+    C --> D["run_conversation()<br/>run_agent.py:8575"]
+    D --> E["输入净化 + 重置计数器<br/>run_agent.py:8620-8661"]
+    E --> F["重置 IterationBudget<br/>run_agent.py:8683"]
+    F --> G["构建/复用系统提示词<br/>run_agent.py:8738"]
+    G --> H["添加 user message<br/>run_agent.py:8728"]
+    H --> I{"Agent Loop<br/>run_agent.py:8944"}
     I -->|"预算未耗尽"| J["准备 API 消息<br/>注入 memory/plugin 上下文"]
     J --> K["调用 LLM API<br/>streaming/non-streaming"]
     K --> L{"响应类型？"}
@@ -136,7 +136,7 @@ flowchart TD
 
 ### 3.1.4 API 消息构建：双视图架构
 
-进入 Agent Loop 后、发起 API 调用前，Hermes 将内部 `messages` 列表转换为 API 可接受的 `api_messages` 列表（`run_agent.py:8902-9023`）。这个转换包括四步：注入 memory/plugin 临时上下文到用户消息副本（`run_agent.py:8911-8922`）；剥离 `reasoning`、`finish_reason` 等内部字段（`run_agent.py:8932-8940`）以避免 Mistral 等严格 API 的 422 错误；为 Anthropic 端点注入 `cache_control` 断点降低约 75% 的输入 token 成本（`run_agent.py:8979-8984`）；修复孤立 tool 结果并规范化 JSON 格式（`run_agent.py:8986-9023`）确保 bit 级别前缀一致以最大化 KV 缓存复用。
+进入 Agent Loop 后、发起 API 调用前，Hermes 将内部 `messages` 列表转换为 API 可接受的 `api_messages` 列表（`run_agent.py:9060-9181`）。这个转换包括四步：注入 memory/plugin 临时上下文到用户消息副本（`run_agent.py:9069-9080`）；剥离 `reasoning`、`finish_reason` 等内部字段（`run_agent.py:9090-9098`）以避免 Mistral 等严格 API 的 422 错误；为 Anthropic 端点注入 `cache_control` 断点降低约 75% 的输入 token 成本（`run_agent.py:9137-9142`）；修复孤立 tool 结果并规范化 JSON 格式（`run_agent.py:9144-9181`）确保 bit 级别前缀一致以最大化 KV 缓存复用。
 
 这种"双视图"架构解决了一个根本矛盾：**内部需要丰富的元数据，而 API 需要干净的标准格式**。
 
@@ -149,7 +149,7 @@ flowchart TD
 Agent Loop 的入口是一行信息密度极高的 `while` 语句：
 
 ```python
-# run_agent.py:8786
+# run_agent.py:8944
 while (api_call_count < self.max_iterations
        and self.iteration_budget.remaining > 0
        ) or self._budget_grace_call:
@@ -221,7 +221,7 @@ stateDiagram-v2
 **条件 1：用户中断（Interrupt）**
 
 ```python
-# run_agent.py:8791-8796
+# run_agent.py:8949-8954
 if self._interrupt_requested:
     interrupted = True
     _turn_exit_reason = "interrupted_by_user"
@@ -235,7 +235,7 @@ if self._interrupt_requested:
 **条件 2：预算耗尽（Budget Exhausted）**
 
 ```python
-# run_agent.py:8805-8811
+# run_agent.py:8963-8969
 if self._budget_grace_call:
     self._budget_grace_call = False  # grace consumed
 elif not self.iteration_budget.consume():
@@ -250,7 +250,7 @@ elif not self.iteration_budget.consume():
 **条件 3：纯文本响应（Text Response = Final Answer）**
 
 ```python
-# run_agent.py:11203-11205, 11502-11505
+# run_agent.py:11381-11383, 11502-11505
 # No tool calls - this is the final response
 final_response = assistant_message.content or ""
 # ...（strip think blocks, build message, etc.）
@@ -263,18 +263,18 @@ break
 **条件 4：API 调用中中断**
 
 ```python
-# run_agent.py:10654-10656
+# run_agent.py:10829-10831
 if interrupted:
     _turn_exit_reason = "interrupted_during_api_call"
     break
 ```
 
-处理 API 调用期间的中断。`_interruptible_streaming_api_call` 抛出 `InterruptedError`，被内层捕获后设置 `interrupted=True`（`run_agent.py:9769-9780`），会话状态被保存。
+处理 API 调用期间的中断。`_interruptible_streaming_api_call` 抛出 `InterruptedError`，被内层捕获后设置 `interrupted=True`（`run_agent.py:9927-9938`），会话状态被保存。
 
 **条件 5：重试耗尽无响应**
 
 ```python
-# run_agent.py:10680-10684
+# run_agent.py:10856-10860
 if response is None:
     _turn_exit_reason = "all_retries_exhausted_no_response"
     print(f"❌ All API retries exhausted with no successful response.")
@@ -286,7 +286,7 @@ if response is None:
 **条件 6：接近上限时的错误**
 
 ```python
-# run_agent.py:11548-11555
+# run_agent.py:11726-11733
 if api_call_count >= self.max_iterations - 1:
     _turn_exit_reason = f"error_near_max_iterations({error_msg[:80]})"
     final_response = f"I apologize, but I encountered repeated errors: {error_msg}"
@@ -298,13 +298,13 @@ if api_call_count >= self.max_iterations - 1:
 **条件 7：部分流恢复 / 先前内容回退**
 
 ```python
-# run_agent.py:11224-11238
+# run_agent.py:11402-11416
 # Partial stream recovery
 _turn_exit_reason = "partial_stream_recovery"
 final_response = _recovered
 break
 
-# run_agent.py:11251-11264
+# run_agent.py:11429-11442
 # Fallback to prior turn content
 _turn_exit_reason = "fallback_prior_turn_content"
 final_response = self._strip_think_blocks(fallback).strip()
@@ -313,23 +313,23 @@ break
 
 当模型返回空响应时，Hermes 不会立即放弃，而是启动三层回退机制。
 
-**第一层：部分流恢复**（`run_agent.py:11221-11238`）。如果流式传输在连接中断前已经向客户端发送了有意义的文本，直接使用已发送的内容作为最终响应——用户已经在屏幕上看到了这些内容，重新生成只会造成重复。
+**第一层：部分流恢复**（`run_agent.py:11399-11416`）。如果流式传输在连接中断前已经向客户端发送了有意义的文本，直接使用已发送的内容作为最终响应——用户已经在屏幕上看到了这些内容，重新生成只会造成重复。
 
-**第二层：先前内容回退**（`run_agent.py:11250-11264`）。如果上一轮迭代中模型生成了有意义的内容（例如"好的，已经完成！"）然后调用了 memory 工具保存记忆，memory 执行后模型返回空——此时上一轮的内容就是实际的最终答案。但有一个重要限定（`run_agent.py:11244-11249`）：只有当所有工具调用都是"管家类"（memory、todo 等）时才使用先前内容。如果调用了 terminal、search_files 等实质性工具，先前文本可能只是"我来查看一下目录..."这样的中间叙述，不应作为最终答案。
+**第二层：先前内容回退**（`run_agent.py:11428-11442`）。如果上一轮迭代中模型生成了有意义的内容（例如"好的，已经完成！"）然后调用了 memory 工具保存记忆，memory 执行后模型返回空——此时上一轮的内容就是实际的最终答案。但有一个重要限定（`run_agent.py:11422-11427`）：只有当所有工具调用都是"管家类"（memory、todo 等）时才使用先前内容。如果调用了 terminal、search_files 等实质性工具，先前文本可能只是"我来查看一下目录..."这样的中间叙述，不应作为最终答案。
 
-**第三层：Post-tool nudge**（`run_agent.py:11266-11309`）。如果前两层都不适用，Hermes 向模型注入一条 nudge 提示要求继续推理——这是为弱模型（mimo-v2-pro、GLM-5 等）在工具结果后返回空的场景设计的（#9400）。
+**第三层：Post-tool nudge**（`run_agent.py:11444-11487`）。如果前两层都不适用，Hermes 向模型注入一条 nudge 提示要求继续推理——这是为弱模型（mimo-v2-pro、GLM-5 等）在工具结果后返回空的场景设计的（#9400）。
 
 ### 3.2.4 内层重试循环与双层结构
 
-外层 Agent Loop 内嵌套着内层重试循环（`run_agent.py:9080`，`max_retries=3`）。两者的关系是：**外层循环**每次迭代 = 一次完整的"API 调用 → 响应处理 → 工具执行"周期，由迭代预算控制；**内层循环**每次迭代 = 一次 API 调用尝试，由重试计数器控制。外层预算只计一次——`api_call_count` 在进入内层前已自增（`run_agent.py:8798`），不受内层重试次数影响。
+外层 Agent Loop 内嵌套着内层重试循环（`run_agent.py:9238`，`max_retries=3`）。两者的关系是：**外层循环**每次迭代 = 一次完整的"API 调用 → 响应处理 → 工具执行"周期，由迭代预算控制；**内层循环**每次迭代 = 一次 API 调用尝试，由重试计数器控制。外层预算只计一次——`api_call_count` 在进入内层前已自增（`run_agent.py:8956`），不受内层重试次数影响。
 
-Hermes 在内层循环中优先选择流式传输路径（`run_agent.py:9160-9198`），即使没有流式消费者——streaming 提供 90 秒过时流检测和 60 秒读超时，防止连接挂死。
+Hermes 在内层循环中优先选择流式传输路径（`run_agent.py:9318-9356`），即使没有流式消费者——streaming 提供 90 秒过时流检测和 60 秒读超时，防止连接挂死。
 
 ### 3.2.5 隐式状态机的代价
 
-这些 break 条件分散在超过 1000 行代码中（从 `run_agent.py:8786` 到约 `run_agent.py:11556`），形成了一个隐式状态机。`_turn_exit_reason` 字符串的存在本身就是一个信号——**开发者自己也需要一种方式来追踪"循环到底是怎么退出的"**。如果状态机是显式的，退出原因就是状态转换本身，不需要额外的诊断字段。
+这些 break 条件分散在超过 1000 行代码中（从 `run_agent.py:8944` 到约 `run_agent.py:11734`），形成了一个隐式状态机。`_turn_exit_reason` 字符串的存在本身就是一个信号——**开发者自己也需要一种方式来追踪"循环到底是怎么退出的"**。如果状态机是显式的，退出原因就是状态转换本身，不需要额外的诊断字段。
 
-`_turn_exit_reason` 初始化为 `"unknown"`（`run_agent.py:8745`），在每个退出路径中被覆盖——如果最终仍是 `"unknown"`，意味着出现了未预期的退出路径。这种隐式设计在 break 条件只有 2-3 个时清晰高效，但增长到 10+ 个后，认知负担急剧上升（P-03-02）。
+`_turn_exit_reason` 初始化为 `"unknown"`（`run_agent.py:8903`），在每个退出路径中被覆盖——如果最终仍是 `"unknown"`，意味着出现了未预期的退出路径。这种隐式设计在 break 条件只有 2-3 个时清晰高效，但增长到 10+ 个后，认知负担急剧上升（P-03-02）。
 
 ---
 
@@ -356,20 +356,20 @@ class IterationBudget:
         self._used = 0
 ```
 
-注释中明确说明了一个重要的设计决策：**父子 Agent 的预算是独立的**。父 Agent 有 90 次迭代预算，每个子 Agent 有 50 次（`run_agent.py:206-210`），它们之间不存在"消费共享池"的关系。这意味着一个父 Agent 如果派生 3 个子 Agent，理论上总迭代次数可达 90 + 3 × 50 = 240 次。
+注释中明确说明了一个重要的设计决策：**父子 Agent 的预算是独立的**。父 Agent 有 90 次迭代预算，每个子 Agent 有 50 次（`run_agent.py:208-212`），它们之间不存在"消费共享池"的关系。这意味着一个父 Agent 如果派生 3 个子 Agent，理论上总迭代次数可达 90 + 3 × 50 = 240 次。
 
 这个设计选择的 Why 是什么？答案在于**可预测性**。如果父子共享预算，那么子 Agent 的复杂度直接影响父 Agent 的可用迭代次数，用户无法预估自己的请求能否完成。独立预算让每个层级的行为更加确定。
 
-但独立预算也意味着成本控制的挑战。想象一个场景：用户请求"重构整个项目"，模型决定为每个模块派生一个子 Agent。如果项目有 10 个模块，总迭代次数可达 90 + 10 × 50 = 590 次，远超父 Agent 的 90 次上限。`delegation.max_iterations` 配置项（`run_agent.py:206`）是对此的缓解——用户可以通过 `config.yaml` 降低子 Agent 的上限。子 Agent 创建时，`max_iterations` 从 `function_args` 中传递（`run_agent.py:7449`），而非使用父 Agent 的默认值。
+但独立预算也意味着成本控制的挑战。想象一个场景：用户请求"重构整个项目"，模型决定为每个模块派生一个子 Agent。如果项目有 10 个模块，总迭代次数可达 90 + 10 × 50 = 590 次，远超父 Agent 的 90 次上限。`delegation.max_iterations` 配置项（`run_agent.py:208`）是对此的缓解——用户可以通过 `config.yaml` 降低子 Agent 的上限。子 Agent 创建时，`max_iterations` 从 `function_args` 中传递（`run_agent.py:7607`），而非使用父 Agent 的默认值。
 
-`IterationBudget` 还提供了 `refund()` 方法，用于退还不应计入预算的迭代。例如 `execute_code`（程序化工具调用）的迭代会被退还（`run_agent.py:202-215` 注释说明），因为这些迭代是用户代码驱动的，不应消耗 Agent 的自主决策预算。上下文压缩后重启的迭代也会被退还（`run_agent.py:10659-10660`），因为压缩是系统行为，不是 Agent 的决策消耗。
+`IterationBudget` 还提供了 `refund()` 方法，用于退还不应计入预算的迭代。例如 `execute_code`（程序化工具调用）的迭代会被退还（`run_agent.py:202-215` 注释说明），因为这些迭代是用户代码驱动的，不应消耗 Agent 的自主决策预算。上下文压缩后重启的迭代也会被退还（`run_agent.py:10834-10835`），因为压缩是系统行为，不是 Agent 的决策消耗。
 
 ### 3.3.2 Grace Call：最后一搏
 
 Grace Call 的设计理念记录在一段注释中，这段注释的价值远超其代码行数：
 
 ```python
-# run_agent.py:1001-1008
+# run_agent.py:1011-1018
 # Iteration budget: the LLM is only notified when it actually exhausts
 # the iteration budget (api_call_count >= max_iterations).  At that
 # point we inject ONE message, allow one final API call, and if the
@@ -386,22 +386,22 @@ self._budget_grace_call = False
 
 **第二，耗尽时注入一条消息**——给模型一次 grace call 的机会产出最终响应。
 
-**第三，如果 grace call 仍返回工具调用而非文本**——则强制注入 user-message 要求模型总结。这是 `_handle_max_iterations` 方法的职责（`run_agent.py:8248`）。
+**第三，如果 grace call 仍返回工具调用而非文本**——则强制注入 user-message 要求模型总结。这是 `_handle_max_iterations` 方法的职责（`run_agent.py:8406`）。
 
 Grace Call 的消费逻辑体现在循环入口：
 
 ```python
-# run_agent.py:8805-8806
+# run_agent.py:8963-8964
 if self._budget_grace_call:
     self._budget_grace_call = False  # grace consumed
 ```
 
 一旦 `_budget_grace_call` 被设为 `True`（在预算耗尽的处理逻辑中），循环会多执行一次迭代。在这次迭代中，grace 标志被置为 `False`，因此下一次循环条件检查时，三个条件都为 `False`，循环终止。
 
-如果 grace call 后模型仍未产出文本响应，`_handle_max_iterations`（`run_agent.py:8248`）接管：
+如果 grace call 后模型仍未产出文本响应，`_handle_max_iterations`（`run_agent.py:8406`）接管：
 
 ```python
-# run_agent.py:8248-8257
+# run_agent.py:8406-8415
 def _handle_max_iterations(self, messages: list, api_call_count: int) -> str:
     """Request a summary when max iterations are reached."""
     print(f"⚠️  Reached maximum iterations ({self.max_iterations}). Requesting summary...")
@@ -462,10 +462,10 @@ status_callback: callable = None,
 
 ### 3.4.2 step_callback 的实现
 
-`step_callback` 在每次 API 调用前触发（`run_agent.py:8813-8839`），携带上一轮工具调用的摘要：
+`step_callback` 在每次 API 调用前触发（`run_agent.py:8971-8997`），携带上一轮工具调用的摘要：
 
 ```python
-# run_agent.py:8813-8837
+# run_agent.py:8971-8995
 # Fire step_callback for gateway hooks (agent:step event)
 if self.step_callback is not None:
     try:
@@ -494,7 +494,7 @@ if self.step_callback is not None:
 
 在 11 个回调中，`clarify_callback` 是唯一一个**双向**的——它不仅通知外部，还需要接收外部的输入（用户对问题的回答）。这使得它成为 Agent 与环境之间唯一的同步交互点。
 
-注释说得很清楚（`run_agent.py:792-793`）：
+注释说得很清楚（`run_agent.py:797-798`）：
 
 ```python
 # clarify_callback (callable): Callback function(question, choices) -> str
@@ -513,7 +513,7 @@ if self.step_callback is not None:
 
 在主循环的内层，每次 API 调用都被 `try/except` 包裹。当异常发生时，Hermes 不会简单地重试——它首先通过 `classify_api_error`（`agent/error_classifier.py:242`）对错误进行结构化分类。
 
-`error_classifier.py` 是一个 829 行的独立模块，开头的 docstring 说明了它的定位：
+`error_classifier.py` 是一个 834 行的独立模块，开头的 docstring 说明了它的定位：
 
 ```python
 # agent/error_classifier.py:1-9
@@ -552,10 +552,10 @@ class FailoverReason(enum.Enum):
     unknown = "unknown"                  # Catch-all — retry
 ```
 
-每种错误类型对应的恢复策略编码在 `ClassifiedError` 数据类中（`agent/error_classifier.py:62-78`）：
+每种错误类型对应的恢复策略编码在 `ClassifiedError` 数据类中（`agent/error_classifier.py:63-79`）：
 
 ```python
-# agent/error_classifier.py:62-78
+# agent/error_classifier.py:63-79
 @dataclass
 class ClassifiedError:
     reason: FailoverReason
@@ -576,7 +576,7 @@ class ClassifiedError:
 - `auth_permanent`：`retryable=False` — 不可恢复，直接终止
 - `billing`：`retryable=False, should_rotate_credential=True, should_fallback=True` — 换凭证或换提供商
 
-以一个典型场景为例：用户在长对话中发送消息，OpenRouter 返回 HTTP 429 错误，消息体包含 `"rate limit exceeded, try again in 30s"`。分类管道依次检查：阶段 1（非 Anthropic 特定模式）跳过；阶段 2（HTTP 429）命中——但 429 需要进一步细化，是真正的速率限制还是计费问题？分类器检查 `_BILLING_PATTERNS`（均不匹配），确认为 `rate_limit`。主循环收到 `should_fallback=True`，检查 fallback chain 是否有可用的备用提供商（`run_agent.py:10200-10213`）：如果有，立即切换而非等待 30 秒；如果没有，退避等待后重试。
+以一个典型场景为例：用户在长对话中发送消息，OpenRouter 返回 HTTP 429 错误，消息体包含 `"rate limit exceeded, try again in 30s"`。分类管道依次检查：阶段 1（非 Anthropic 特定模式）跳过；阶段 2（HTTP 429）命中——但 429 需要进一步细化，是真正的速率限制还是计费问题？分类器检查 `_BILLING_PATTERNS`（均不匹配），确认为 `rate_limit`。主循环收到 `should_fallback=True`，检查 fallback chain 是否有可用的备用提供商（`run_agent.py:10358-10371`）：如果有，立即切换而非等待 30 秒；如果没有，退避等待后重试。
 
 ### 3.5.3 七阶段分类管道
 
@@ -636,7 +636,7 @@ flowchart TD
 **阶段 5** 的启发式推理尤为精妙。当服务器断连发生在大会话中时，Hermes 推断为上下文溢出而非简单超时：
 
 ```python
-# agent/error_classifier.py:397-406
+# agent/error_classifier.py:398-407
 is_disconnect = any(p in error_msg for p in _SERVER_DISCONNECT_PATTERNS)
 if is_disconnect and not status_code:
     is_large = (approx_tokens > context_length * 0.6
@@ -651,7 +651,7 @@ if is_disconnect and not status_code:
     return _result(FailoverReason.timeout, retryable=True)
 ```
 
-洞察是：许多本地推理服务器（vLLM、llama.cpp、Ollama）在上下文溢出时直接断开连接而非返回结构化错误码。阶段 5 必须在阶段 6（通用传输错误）之前（`agent/error_classifier.py:391-395`）：否则 `RemoteProtocolError` 总是映射为 `timeout`，无法触发上下文压缩。
+洞察是：许多本地推理服务器（vLLM、llama.cpp、Ollama）在上下文溢出时直接断开连接而非返回结构化错误码。阶段 5 必须在阶段 6（通用传输错误）之前（`agent/error_classifier.py:392-396`）：否则 `RemoteProtocolError` 总是映射为 `timeout`，无法触发上下文压缩。
 
 ### 3.5.4 模式匹配的规模
 
@@ -660,13 +660,13 @@ if is_disconnect and not status_code:
 | 模式组 | 源码位置 | 模式数量 | 示例 |
 |--------|----------|---------|------|
 | `_BILLING_PATTERNS` | `error_classifier.py:89-100` | 10 | `"insufficient credits"`, `"payment required"` |
-| `_RATE_LIMIT_PATTERNS` | `error_classifier.py:103-119` | 17 | `"rate limit"`, `"too many requests"`, `"throttled"` |
-| `_CONTEXT_OVERFLOW_PATTERNS` | `error_classifier.py:150-183` | 30+ | `"context length"`, `"超过最大长度"`, `"上下文长度"` |
+| `_RATE_LIMIT_PATTERNS` | `error_classifier.py:103-119` | 15 | `"rate limit"`, `"too many requests"`, `"throttled"` |
+| `_CONTEXT_OVERFLOW_PATTERNS` | `error_classifier.py:150-183` | 27 | `"context length"`, `"超过最大长度"`, `"上下文长度"` |
 | `_MODEL_NOT_FOUND_PATTERNS` | `error_classifier.py:186-195` | 8 | `"model not found"`, `"unsupported model"` |
-| `_AUTH_PATTERNS` | `error_classifier.py:197-208` | 8 | `"invalid api key"`, `"access denied"` |
+| `_AUTH_PATTERNS` | `error_classifier.py:198-209` | 8 | `"invalid api key"`, `"access denied"` |
 | `_TRANSPORT_ERROR_TYPES` | `error_classifier.py:216-226` | 12 | `"ReadTimeout"`, `"APIConnectionError"` |
 
-总计超过 100 个模式，涵盖中文错误消息（`"超过最大长度"`，`error_classifier.py:175-177`）、AWS Bedrock（`"throttlingexception"`）、DashScope（`"rate increased too quickly"`）等多提供商特有格式。分类前，错误消息从多个来源合成（`agent/error_classifier.py:277-316`）：`str(error)`、响应体 `error.message`、OpenRouter `metadata.raw` 内嵌错误，确保 SDK 只暴露部分信息时仍能准确匹配。
+总计超过 100 个模式，涵盖中文错误消息（`"超过最大长度"`，`error_classifier.py:176-178`）、AWS Bedrock（`"throttlingexception"`）、DashScope（`"rate increased too quickly"`）等多提供商特有格式。分类前，错误消息从多个来源合成（`agent/error_classifier.py:278-317`）：`str(error)`、响应体 `error.message`、OpenRouter `metadata.raw` 内嵌错误，确保 SDK 只暴露部分信息时仍能准确匹配。
 
 ### 3.5.5 退避策略：Jittered Backoff
 
@@ -692,10 +692,10 @@ def jittered_backoff(
 
 Jitter 通过 `time.time_ns() ^ (tick * 0x9E3779B9)` 生成种子（`agent/retry_utils.py:53`），其中 `0x9E3779B9` 是黄金比例的 32 位近似值，`tick` 是锁保护的单调计数器（`agent/retry_utils.py:15-16`），确保并发重试不会对齐。
 
-实际的重试逻辑中，Hermes 会先检查 `Retry-After` 响应头（`run_agent.py:10604-10614`）：
+实际的重试逻辑中，Hermes 会先检查 `Retry-After` 响应头（`run_agent.py:10779-10789`）：
 
 ```python
-# run_agent.py:10604-10614
+# run_agent.py:10779-10789
 if is_rate_limited:
     _resp_headers = getattr(getattr(api_error, "response", None), "headers", None)
     if _resp_headers and hasattr(_resp_headers, "get"):
@@ -708,14 +708,14 @@ if is_rate_limited:
 wait_time = _retry_after if _retry_after else jittered_backoff(retry_count, base_delay=2.0, max_delay=60.0)
 ```
 
-注意两个细节：`Retry-After` 只在 `is_rate_limited` 条件下检查，非速率限制错误不解析；实际使用的 `base_delay=2.0` 比默认的 `5.0` 更激进，因为 CLI 用户等不了 2 分钟。退避期间以 200ms 间隔轮询中断标志（`run_agent.py:10631-10643`），每 30 秒更新活动时间戳防止 Gateway 超时（`run_agent.py:10646-10651`）。
+注意两个细节：`Retry-After` 只在 `is_rate_limited` 条件下检查，非速率限制错误不解析；实际使用的 `base_delay=2.0` 比默认的 `5.0` 更激进，因为 CLI 用户等不了 2 分钟。退避期间以 200ms 间隔轮询中断标志（`run_agent.py:10806-10818`），每 30 秒更新活动时间戳防止 Gateway 超时（`run_agent.py:10821-10826`）。
 
 ### 3.5.6 /steer 命令注入
 
-`/steer` 命令注入（`run_agent.py:8847-8858`）允许用户在 Agent 执行过程中改变方向。实现面临的约束是消息角色必须严格交替——不能直接插入 user 消息。解决方案是将 steer 文本"寄生"在已有的 tool 结果消息上：
+`/steer` 命令注入（`run_agent.py:9005-9016`）允许用户在 Agent 执行过程中改变方向。实现面临的约束是消息角色必须严格交替——不能直接插入 user 消息。解决方案是将 steer 文本"寄生"在已有的 tool 结果消息上：
 
 ```python
-# run_agent.py:8864-8868
+# run_agent.py:9022-9026
 for _si in range(len(messages) - 1, -1, -1):
     _sm = messages[_si]
     if isinstance(_sm, dict) and _sm.get("role") == "tool":
@@ -731,7 +731,7 @@ for _si in range(len(messages) - 1, -1, -1):
 
 ### P-03-01 [Arch/Critical] 12K 行单文件：AIAgent 包含所有职责
 
-**What**：`run_agent.py` 包含 11,988 行代码，`AIAgent` 类承担了消息管理、API 调用、工具分发、错误恢复、会话持久化、上下文压缩等所有职责。这是一个典型的 God Object。
+**What**：`run_agent.py` 包含 12,164 行代码，`AIAgent` 类承担了消息管理、API 调用、工具分发、错误恢复、会话持久化、上下文压缩等所有职责。这是一个典型的 God Object。
 
 **Why**：这种结构是有机增长的结果。早期 Agent 只需要"调用 API → 执行工具 → 循环"的简单逻辑，所有代码放在一个类中是最自然的选择。随着功能叠加（stream 支持、多 provider 适配、错误恢复、grace call、/steer、delegation...），文件膨胀到了当前的规模。
 
@@ -745,7 +745,7 @@ for _si in range(len(messages) - 1, -1, -1):
 
 ### P-03-02 [Arch/High] 隐式状态机：while 循环 + break，无显式状态转换
 
-**What**：主循环（`run_agent.py:8786`）通过 10+ 个 `break` 条件实现状态转换，状态散布在超过 1000 行代码中。`_turn_exit_reason` 字符串是对这种隐式性的事后补救。
+**What**：主循环（`run_agent.py:8944`）通过 10+ 个 `break` 条件实现状态转换，状态散布在超过 1000 行代码中。`_turn_exit_reason` 字符串是对这种隐式性的事后补救。
 
 **Why**：`while` + `break` 是最简单的控制流模式，没有引入额外的抽象层。在早期只有 2-3 个退出条件时，这种方式清晰高效。但随着条件增长到 10+，阅读者必须扫描整个循环体才能理解"循环什么时候会退出"。
 
@@ -802,7 +802,7 @@ while state != LoopState.TERMINATED:
 
 ### P-03-05 [Rel/Medium] 退避策略对 Rate-Limit 头的利用不完整
 
-**What**：`retry_utils.py:19-57` 使用固定指数退避 + 抖动，仅在 `is_rate_limited` 条件下解析 `Retry-After` 头（`run_agent.py:10604-10614`），且不解析 `X-RateLimit-Reset` 等更精确的速率限制头。
+**What**：`retry_utils.py:19-57` 使用固定指数退避 + 抖动，仅在 `is_rate_limited` 条件下解析 `Retry-After` 头（`run_agent.py:10779-10789`），且不解析 `X-RateLimit-Reset` 等更精确的速率限制头。
 
 **Why**：不同提供商的速率限制头格式各异（`Retry-After` 秒数 vs. HTTP 日期、`X-RateLimit-Reset` Unix 时间戳、`X-RateLimit-Remaining` 剩余次数...），统一解析的开发成本较高。固定退避是更稳健的通用方案。
 
@@ -832,9 +832,9 @@ def classify_api_error(error, ...):
 
 答案现在清晰了。一条用户消息要经历**四个阶段**：
 
-1. **准备阶段**：输入净化、计数器重置、预算初始化、连接健康检查、系统提示词构建。这些看似琐碎的操作，实际上在防御前一回合的状态泄露（`run_agent.py:8489-8501`）、环境异常（代理字符、broken pipes、僵尸连接），以及确保 prompt cache 的前缀稳定性。每一行代码都对应着一个生产环境中真实发生过的故障。
+1. **准备阶段**：输入净化、计数器重置、预算初始化、连接健康检查、系统提示词构建。这些看似琐碎的操作，实际上在防御前一回合的状态泄露（`run_agent.py:8649-8661`）、环境异常（代理字符、broken pipes、僵尸连接），以及确保 prompt cache 的前缀稳定性。每一行代码都对应着一个生产环境中真实发生过的故障。
 
-2. **循环阶段**：在 `while` 循环（`run_agent.py:8786`）中，消息列表被转换为 API 视图（注入上下文、清理内部字段、应用 cache control），然后调用 LLM，解析响应——如果包含 tool_calls 则执行工具并继续循环，如果是纯文本则作为最终答案退出。模型通过返回 `tool_calls` 或纯文本来隐式控制循环的继续或终止。这是第一章所述"LLM-as-Control-Plane"设计赌注的直接体现——控制权在模型手中，Hermes 只是执行者。
+2. **循环阶段**：在 `while` 循环（`run_agent.py:8944`）中，消息列表被转换为 API 视图（注入上下文、清理内部字段、应用 cache control），然后调用 LLM，解析响应——如果包含 tool_calls 则执行工具并继续循环，如果是纯文本则作为最终答案退出。模型通过返回 `tool_calls` 或纯文本来隐式控制循环的继续或终止。这是第一章所述"LLM-as-Control-Plane"设计赌注的直接体现——控制权在模型手中，Hermes 只是执行者。
 
 3. **恢复阶段**：当 API 调用失败时，错误分类器（`agent/error_classifier.py`）通过七阶段管道将异常映射为结构化恢复策略。分类器产出的四个布尔标志（`retryable`、`should_compress`、`should_rotate_credential`、`should_fallback`）驱动主循环的恢复逻辑——重试、凭证轮换、上下文压缩、提供商回退——每种恢复动作都有明确的触发条件和执行路径。
 
