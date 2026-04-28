@@ -31,3 +31,10 @@ enable = false
 [output.html.fold]
 enable = true
 level = 1
+
+# Single-page printable view at /print.html. Useful for offline reading
+# and PDF export (browser File → Print → Save as PDF). page-break-on-h1
+# = true keeps each chapter on its own page boundary.
+[output.html.print]
+enable = true
+page-break = true
