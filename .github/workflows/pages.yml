@@ -1,0 +1,75 @@
+name: Deploy Book to GitHub Pages
+
+# Trigger on every push to main + manual dispatch. Pages itself is the
+# bottleneck (concurrency: pages); CI happily runs whenever.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Permissions required for the deploy-pages action to mint an OIDC token
+# and write the artifact to Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy may be in flight at a time. New pushes cancel
+# any older queued build to avoid stale artifacts winning a race.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Setup Node (for pagefind)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Install mdbook only — no plugins. The book uses no preprocessors.
+      # `--locked` keeps the resolver deterministic across CI runs.
+      - name: Install mdBook
+        run: |
+          cargo install mdbook \
+            --no-default-features \
+            --features search \
+            --vers "^0.4" \
+            --locked
+
+      - name: Build book
+        run: |
+          rm -rf book dist
+          mdbook build .
+          mkdir -p dist
+          cp -R book/. dist/
+          # Pagefind generates the search index AFTER mdbook builds.
+          # The output script (loaded via additional-js) does the
+          # client-side search at runtime against this index.
+          npx --yes pagefind@latest --site dist
+          # Without .nojekyll, GitHub Pages would silently drop any
+          # asset whose name starts with `_` (mdbook themes do this).
+          touch dist/.nojekyll
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
