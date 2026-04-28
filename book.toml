@@ -10,4 +10,24 @@ build-dir = "book"
 create-missing = true
 
 [output.html]
-additional-js = ["mermaid.min.js", "mermaid-init.js"]
+# site-url is the base path under which the book is served. For
+# https://jerdbo.github.io/hermes-book/ → "/hermes-book/". Without
+# this, mdbook generates absolute "/foo.html" links that 404 on Pages.
+site-url = "/hermes-book/"
+default-theme = "light"
+preferred-dark-theme = "ayu"
+additional-js  = ["mermaid.min.js", "mermaid-init.js", "pagefind-search.js"]
+additional-css = ["pagefind-search.css"]
+git-repository-url = "https://github.com/jerdbo/hermes-book"
+edit-url-template = "https://github.com/jerdbo/hermes-book/edit/main/hermes-book/{path}"
+
+# mdBook's built-in search uses ASCII-aware tokenization that handles
+# Chinese poorly (everything collapses to per-character ngrams). We
+# disable it and let pagefind (CJK-aware, post-build indexer) take
+# over via additional-js above.
+[output.html.search]
+enable = false
+
+[output.html.fold]
+enable = true
+level = 1
