@@ -1,5 +1,5 @@
 [book]
-authors = ["栗子KK"]
+authors = ["jerdbo"]
 language = "zh"
 multilingual = false
 src = "src"
@@ -19,7 +19,7 @@ preferred-dark-theme = "ayu"
 additional-js  = ["mermaid.min.js", "mermaid-init.js", "pagefind-search.js"]
 additional-css = ["pagefind-search.css"]
 git-repository-url = "https://github.com/jerdbo/hermes-book"
-edit-url-template = "https://github.com/jerdbo/hermes-book/edit/main/hermes-book/{path}"
+edit-url-template = "https://github.com/jerdbo/hermes-book/edit/main/{path}"
 
 # mdBook's built-in search uses ASCII-aware tokenization that handles
 # Chinese poorly (everything collapses to per-character ngrams). We
